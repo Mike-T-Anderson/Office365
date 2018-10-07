@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<feed  version="1.0" hasPendingRequests="false" >
+  <company></company>
+  <status>200</status>
+  <errmsg>OK</errmsg>
+  <interval>0</interval>
+    <entry type="predatasource">
+        <version>1538861880</version>
+        <name>Office365 app status</name>
+        <displayedas>Office365 app status</displayedas>
+        <description>By Mike Suding. Monitors Office 365 via Microsoft API. http://blog.mikesuding.com/index.php/2018/07/19/office365/ for more info</description>
+        <collector>batchscript</collector>
+        <hasMultiInstances>true</hasMultiInstances>
+        <schedule>120</schedule>
+        <appliesTo>Office365Monitoring</appliesTo>
+        <wildcardauto>true</wildcardauto>
+        <wildcardpersist>false</wildcardpersist>
+        <wildcardlinuxscript>ad_script</wildcardlinuxscript>
+        <wildcardlinuxcmdline>type=&#34;embeded&#34; </wildcardlinuxcmdline>
+        <wildcardwinscript>ad_script</wildcardwinscript>
+        <wildcardwincmdline>type=&#34;embeded&#34; </wildcardwincmdline>
+        <wildcardgroovyscript>import groovy.json.JsonSlurper
+import org.apache.commons.codec.binary.Hex
+import org.apache.http.client.methods.HttpGet
+import org.apache.http.client.methods.HttpPost
+import org.apache.http.client.methods.HttpPatch
+import org.apache.http.entity.StringEntity
+import org.apache.http.impl.client.CloseableHttpClient
+import org.apache.http.impl.client.HttpClients
+import org.apache.http.util.EntityUtils
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+
+
+//Account variables
+String VarAccessId = hostProps.get(&#34;Office365.LM.Id&#34;)
+String VarAccessKey = hostProps.get(&#34;Office365.LM.Key&#34;)
+String VarAccount = hostProps.get(&#34;lm.account&#34;)
+
+String VarDeviceIdProperty = hostProps.get(&#34;system.deviceid&#34;)
+String VarOffice365Tenant = hostProps.get(&#34;Office365.Tenant&#34;)
+String VarApplicationID = hostProps.get(&#34;Office365.AppID.key&#34;)
+
+String GetAccessToken (String Account, String AccessId, String AccessKey, String DeviceID, String Office365Tenant, String ApplicationID)
+{
+    ResourcePath = &#34;/device/devices/$DeviceID/properties&#34;
+    FilterString = &#34;?filter=name~Office365*&#34;
+    Url = &#34;https://&#34; + Account + &#34;.logicmonitor.com&#34; + &#34;/santaba/rest&#34; + ResourcePath + FilterString
+    epoch = System.currentTimeMillis()
+    requestVars = &#34;GET&#34; + epoch + ResourcePath
+    hmac = Mac.getInstance(&#34;HmacSHA256&#34;)
+    secret = new SecretKeySpec(AccessKey.getBytes(), &#34;HmacSHA256&#34;)
+    hmac.init(secret)
+    hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))
+    signature = hmac_signed.bytes.encodeBase64()
+    CloseableHttpClient httpclient = HttpClients.createDefault()
+    httpGet = new HttpGet(Url)
+    httpGet.addHeader(&#34;Authorization&#34; , &#34;LMv1 &#34; + AccessId + &#34;:&#34; + signature + &#34;:&#34; + epoch)
+    httpResponse = httpclient.execute(httpGet)
+    ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+    code = httpResponse.getStatusLine().getStatusCode()
+    httpclient.close()
+
+    JsonSlurperParser = new JsonSlurper()
+    ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+    Office365TokenExpires = (ResponseObject.data.items.find {it.name == &#34;Office365.TokenExpires&#34;}).value
+    Office365AccessToken = (ResponseObject.data.items.find {it.name == &#34;Office365.AccessToken&#34;}).value
+    Office365RefreshToken = hostProps.get(&#34;Office365.RefreshToken.key&#34;)
+
+    CurrentSeconds = System.currentTimeSeconds()
+
+    if (Office365TokenExpires.toLong() - CurrentSeconds &#60; 120)
+    {
+        Url = &#34;https://login.windows.net/$Office365Tenant/oauth2/token&#34;
+        
+        ResourcePath = &#34;https://manage.office.com&#34;
+        RedirectUriPath = &#34;urn:ietf:wg:oauth:2.0:oob&#34;
+
+        Body = &#34;resource=$ResourcePath&#38;client_id=$ApplicationID&#38;redirect_uri=$RedirectUriPath&#38;grant_type=refresh_token&#38;refresh_token=$Office365RefreshToken&#34;
+        EncodedBody = new StringEntity(Body)
+
+        CloseableHttpClient UpdateTokenClient = HttpClients.createDefault()
+        httpPost = new HttpPost(Url)
+        httpPost.setHeader(&#34;Content-type&#34;,&#34;application/x-www-form-urlencoded&#34;)
+        httpPost.setEntity(EncodedBody)
+        httpResponse = UpdateTokenClient.execute(httpPost)
+
+        ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+
+        code = httpResponse.getStatusLine().getStatusCode()
+        UpdateTokenClient.close()
+
+        JsonSlurperParser = new JsonSlurper()
+        ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+        
+        Office365TokenExpires = ResponseObject.expires_on
+        Office365AccessToken = ResponseObject.access_token
+        Office365RefreshToken = ResponseObject.refresh_token
+
+        //Update device properties
+        ResourcePath = &#34;/device/devices/$DeviceID&#34;
+        QueryParams = &#39;?patchFields=customProperties&#38;opType=replace&#39;
+        Url = &#34;https://&#34; + Account + &#34;.logicmonitor.com&#34; + &#34;/santaba/rest&#34; + ResourcePath + QueryParams
+        epoch = System.currentTimeMillis()
+        UpdateData = &#39;{&#34;customProperties&#34;:[{&#34;name&#34;:&#34;Office365.TokenExpires&#34;,&#34;value&#34;:&#34;&#39; + Office365TokenExpires + &#39;&#34;},{&#34;name&#34;:&#34;Office365.RefreshToken.key&#34;,&#34;value&#34;:&#34;&#39; + Office365RefreshToken + &#39;&#34;},{&#34;name&#34;:&#34;Office365.AccessToken&#34;,&#34;value&#34;:&#34;&#39; + Office365AccessToken + &#39;&#34;}]}&#39;
+        params = new StringEntity(UpdateData)
+        
+        requestVars = &#34;PATCH&#34; + epoch + UpdateData + ResourcePath
+
+        hmac = Mac.getInstance(&#34;HmacSHA256&#34;)
+        secret = new SecretKeySpec(AccessKey.getBytes(), &#34;HmacSHA256&#34;)
+        hmac.init(secret)
+        hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))
+        signature = hmac_signed.bytes.encodeBase64()
+
+        httpclient = HttpClients.createDefault()
+        httpPatch = new HttpPatch(Url)
+        httpPatch.addHeader(&#34;Authorization&#34; , &#34;LMv1 &#34; + AccessId + &#34;:&#34; + signature + &#34;:&#34; + epoch)
+        httpPatch.setHeader(&#34;Accept&#34;, &#34;application/json&#34;)
+        httpPatch.setHeader(&#34;Content-type&#34;, &#34;application/json&#34;)
+        httpPatch.setEntity(params)
+        httpResponse = httpclient.execute(httpPatch)
+        ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+        code = httpResponse.getStatusLine().getStatusCode()
+        httpclient.close()
+
+        return Office365AccessToken
+    }
+    else
+    {
+        return Office365AccessToken
+    }
+}
+
+def GetOffice365Services (String Token, String Office365Tenant)
+{
+    Url = &#34;https://manage.office.com/api/v1.0/$Office365Tenant/ServiceComms/Services&#34;
+
+    CloseableHttpClient httpclient = HttpClients.createDefault()
+    httpGet = new HttpGet(Url)
+    httpGet.addHeader(&#34;Authorization&#34; , &#34;Bearer &#34; + Token)
+    httpResponse = httpclient.execute(httpGet)
+
+    ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+
+    JsonSlurperParser = new JsonSlurper()
+    ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+    return ResponseObject.value
+}
+
+AccessToken = GetAccessToken(VarAccount, VarAccessId, VarAccessKey, VarDeviceIdProperty, VarOffice365Tenant, VarApplicationID)
+
+Office365ServicesObject = GetOffice365Services (AccessToken,VarOffice365Tenant)
+
+Office365ServicesObject.each
+        {
+            ServiceId = it.Id
+            ServiceDisplayName = it.DisplayName
+            it.Features.each
+                    {
+                        println &#34;${ServiceId}_${it.Name.replace(&#34; &#34;,&#34;&#34;)}##${ServiceId}_${it.Name.replace(&#34; &#34;,&#34;&#34;)}##${ServiceDisplayName} ${it.DisplayName}####group=${ServiceDisplayName}&#34;
+                    }
+        }
+        
+return 0</wildcardgroovyscript>
+        <wildcardschedule>0</wildcardschedule>
+        <wildcarddisable>false</wildcarddisable>
+        <wildcarddeleteinactive>true</wildcarddeleteinactive>
+        <agdmethod>ilp</agdmethod>
+        <agdparams>group</agdparams>
+        <group></group>
+        <tags></tags>
+        <technology>http://blog.mikesuding.com/index.php/2018/07/19/office365/ for more info</technology>
+        <adlist><![CDATA[{"agdmethod":"ilp","method":"ad_script","agdparams":"group","id":0,"filters":[],"params":{"type":"embeded","groovyscript":"import groovy.json.JsonSlurper\r\nimport org.apache.commons.codec.binary.Hex\r\nimport org.apache.http.client.methods.HttpGet\r\nimport org.apache.http.client.methods.HttpPost\r\nimport org.apache.http.client.methods.HttpPatch\r\nimport org.apache.http.entity.StringEntity\r\nimport org.apache.http.impl.client.CloseableHttpClient\r\nimport org.apache.http.impl.client.HttpClients\r\nimport org.apache.http.util.EntityUtils\r\nimport javax.crypto.Mac\r\nimport javax.crypto.spec.SecretKeySpec\r\n\r\n\r\n//Account variables\r\nString VarAccessId = hostProps.get(\"Office365.LM.Id\")\r\nString VarAccessKey = hostProps.get(\"Office365.LM.Key\")\r\nString VarAccount = hostProps.get(\"lm.account\")\r\n\r\nString VarDeviceIdProperty = hostProps.get(\"system.deviceid\")\r\nString VarOffice365Tenant = hostProps.get(\"Office365.Tenant\")\r\nString VarApplicationID = hostProps.get(\"Office365.AppID.key\")\r\n\r\nString GetAccessToken (String Account, String AccessId, String AccessKey, String DeviceID, String Office365Tenant, String ApplicationID)\r\n{\r\n    ResourcePath = \"/device/devices/$DeviceID/properties\"\r\n    FilterString = \"?filter=name~Office365*\"\r\n    Url = \"https://\" + Account + \".logicmonitor.com\" + \"/santaba/rest\" + ResourcePath + FilterString\r\n    epoch = System.currentTimeMillis()\r\n    requestVars = \"GET\" + epoch + ResourcePath\r\n    hmac = Mac.getInstance(\"HmacSHA256\")\r\n    secret = new SecretKeySpec(AccessKey.getBytes(), \"HmacSHA256\")\r\n    hmac.init(secret)\r\n    hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))\r\n    signature = hmac_signed.bytes.encodeBase64()\r\n    CloseableHttpClient httpclient = HttpClients.createDefault()\r\n    httpGet = new HttpGet(Url)\r\n    httpGet.addHeader(\"Authorization\" , \"LMv1 \" + AccessId + \":\" + signature + \":\" + epoch)\r\n    httpResponse = httpclient.execute(httpGet)\r\n    ResponseBody = EntityUtils.toString(httpResponse.getEntity())\r\n    code = httpResponse.getStatusLine().getStatusCode()\r\n    httpclient.close()\r\n\r\n    JsonSlurperParser = new JsonSlurper()\r\n    ResponseObject = JsonSlurperParser.parseText(ResponseBody)\r\n\r\n    Office365TokenExpires = (ResponseObject.data.items.find {it.name == \"Office365.TokenExpires\"}).value\r\n    Office365AccessToken = (ResponseObject.data.items.find {it.name == \"Office365.AccessToken\"}).value\r\n    Office365RefreshToken = hostProps.get(\"Office365.RefreshToken.key\")\r\n\r\n    CurrentSeconds = System.currentTimeSeconds()\r\n\r\n    if (Office365TokenExpires.toLong() - CurrentSeconds < 120)\r\n    {\r\n        Url = \"https://login.windows.net/$Office365Tenant/oauth2/token\"\r\n        \r\n        ResourcePath = \"https://manage.office.com\"\r\n        RedirectUriPath = \"urn:ietf:wg:oauth:2.0:oob\"\r\n\r\n        Body = \"resource=$ResourcePath&client_id=$ApplicationID&redirect_uri=$RedirectUriPath&grant_type=refresh_token&refresh_token=$Office365RefreshToken\"\r\n        EncodedBody = new StringEntity(Body)\r\n\r\n        CloseableHttpClient UpdateTokenClient = HttpClients.createDefault()\r\n        httpPost = new HttpPost(Url)\r\n        httpPost.setHeader(\"Content-type\",\"application/x-www-form-urlencoded\")\r\n        httpPost.setEntity(EncodedBody)\r\n        httpResponse = UpdateTokenClient.execute(httpPost)\r\n\r\n        ResponseBody = EntityUtils.toString(httpResponse.getEntity())\r\n\r\n        code = httpResponse.getStatusLine().getStatusCode()\r\n        UpdateTokenClient.close()\r\n\r\n        JsonSlurperParser = new JsonSlurper()\r\n        ResponseObject = JsonSlurperParser.parseText(ResponseBody)\r\n        \r\n        Office365TokenExpires = ResponseObject.expires_on\r\n        Office365AccessToken = ResponseObject.access_token\r\n        Office365RefreshToken = ResponseObject.refresh_token\r\n\r\n        //Update device properties\r\n        ResourcePath = \"/device/devices/$DeviceID\"\r\n        QueryParams = '?patchFields=customProperties&opType=replace'\r\n        Url = \"https://\" + Account + \".logicmonitor.com\" + \"/santaba/rest\" + ResourcePath + QueryParams\r\n        epoch = System.currentTimeMillis()\r\n        UpdateData = '{\"customProperties\":[{\"name\":\"Office365.TokenExpires\",\"value\":\"' + Office365TokenExpires + '\"},{\"name\":\"Office365.RefreshToken.key\",\"value\":\"' + Office365RefreshToken + '\"},{\"name\":\"Office365.AccessToken\",\"value\":\"' + Office365AccessToken + '\"}]}'\r\n        params = new StringEntity(UpdateData)\r\n        \r\n        requestVars = \"PATCH\" + epoch + UpdateData + ResourcePath\r\n\r\n        hmac = Mac.getInstance(\"HmacSHA256\")\r\n        secret = new SecretKeySpec(AccessKey.getBytes(), \"HmacSHA256\")\r\n        hmac.init(secret)\r\n        hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))\r\n        signature = hmac_signed.bytes.encodeBase64()\r\n\r\n        httpclient = HttpClients.createDefault()\r\n        httpPatch = new HttpPatch(Url)\r\n        httpPatch.addHeader(\"Authorization\" , \"LMv1 \" + AccessId + \":\" + signature + \":\" + epoch)\r\n        httpPatch.setHeader(\"Accept\", \"application/json\")\r\n        httpPatch.setHeader(\"Content-type\", \"application/json\")\r\n        httpPatch.setEntity(params)\r\n        httpResponse = httpclient.execute(httpPatch)\r\n        ResponseBody = EntityUtils.toString(httpResponse.getEntity())\r\n        code = httpResponse.getStatusLine().getStatusCode()\r\n        httpclient.close()\r\n\r\n        return Office365AccessToken\r\n    }\r\n    else\r\n    {\r\n        return Office365AccessToken\r\n    }\r\n}\r\n\r\ndef GetOffice365Services (String Token, String Office365Tenant)\r\n{\r\n    Url = \"https://manage.office.com/api/v1.0/$Office365Tenant/ServiceComms/Services\"\r\n\r\n    CloseableHttpClient httpclient = HttpClients.createDefault()\r\n    httpGet = new HttpGet(Url)\r\n    httpGet.addHeader(\"Authorization\" , \"Bearer \" + Token)\r\n    httpResponse = httpclient.execute(httpGet)\r\n\r\n    ResponseBody = EntityUtils.toString(httpResponse.getEntity())\r\n\r\n    JsonSlurperParser = new JsonSlurper()\r\n    ResponseObject = JsonSlurperParser.parseText(ResponseBody)\r\n\r\n    return ResponseObject.value\r\n}\r\n\r\nAccessToken = GetAccessToken(VarAccount, VarAccessId, VarAccessKey, VarDeviceIdProperty, VarOffice365Tenant, VarApplicationID)\r\n\r\nOffice365ServicesObject = GetOffice365Services (AccessToken,VarOffice365Tenant)\r\n\r\nOffice365ServicesObject.each\r\n        {\r\n            ServiceId = it.Id\r\n            ServiceDisplayName = it.DisplayName\r\n            it.Features.each\r\n                    {\r\n                        println \"${ServiceId}_${it.Name.replace(\" \",\"\")}##${ServiceId}_${it.Name.replace(\" \",\"\")}##${ServiceDisplayName} ${it.DisplayName}####group=${ServiceDisplayName}\"\r\n                    }\r\n        }\r\n        \r\nreturn 0"}}]]></adlist>
+        <schemaVersion>2</schemaVersion>
+        <dataSourceType>1</dataSourceType>
+        <attributes>
+        <attribute>
+            <name>scripttype</name>
+            <value>embed</value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>scriptgroovy</name>
+            <value>import groovy.json.JsonSlurper
+import org.apache.commons.codec.binary.Hex
+import org.apache.http.client.methods.HttpGet
+import org.apache.http.client.methods.HttpPost
+import org.apache.http.client.methods.HttpPatch
+import org.apache.http.entity.StringEntity
+import org.apache.http.impl.client.CloseableHttpClient
+import org.apache.http.impl.client.HttpClients
+import org.apache.http.util.EntityUtils
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+
+//Account variables
+String VarAccessId = hostProps.get(&#34;Office365.LM.Id&#34;)
+String VarAccessKey = hostProps.get(&#34;Office365.LM.Key&#34;)
+String VarAccount = hostProps.get(&#34;lm.account&#34;)
+
+String VarDeviceIdProperty = hostProps.get(&#34;system.deviceid&#34;)
+String VarOffice365Tenant = hostProps.get(&#34;Office365.Tenant&#34;)
+String VarApplicationID = hostProps.get(&#34;Office365.AppID.key&#34;)
+
+String GetAccessToken (String Account, String AccessId, String AccessKey, String DeviceID, String Office365Tenant, String ApplicationID)
+{
+    ResourcePath = &#34;/device/devices/$DeviceID/properties&#34;
+    FilterString = &#34;?filter=name~Office365*&#34;
+    Url = &#34;https://&#34; + Account + &#34;.logicmonitor.com&#34; + &#34;/santaba/rest&#34; + ResourcePath + FilterString
+    epoch = System.currentTimeMillis()
+    requestVars = &#34;GET&#34; + epoch + ResourcePath
+    hmac = Mac.getInstance(&#34;HmacSHA256&#34;)
+    secret = new SecretKeySpec(AccessKey.getBytes(), &#34;HmacSHA256&#34;)
+    hmac.init(secret)
+    hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))
+    signature = hmac_signed.bytes.encodeBase64()
+    CloseableHttpClient httpclient = HttpClients.createDefault()
+    httpGet = new HttpGet(Url)
+    httpGet.addHeader(&#34;Authorization&#34; , &#34;LMv1 &#34; + AccessId + &#34;:&#34; + signature + &#34;:&#34; + epoch)
+    httpResponse = httpclient.execute(httpGet)
+    ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+    code = httpResponse.getStatusLine().getStatusCode()
+    httpclient.close()
+
+    JsonSlurperParser = new JsonSlurper()
+    ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+    Office365TokenExpires = (ResponseObject.data.items.find {it.name == &#34;Office365.TokenExpires&#34;}).value
+    Office365AccessToken = (ResponseObject.data.items.find {it.name == &#34;Office365.AccessToken&#34;}).value
+    Office365RefreshToken = hostProps.get(&#34;Office365.RefreshToken.key&#34;)
+
+    CurrentSeconds = System.currentTimeSeconds()
+
+    if (Office365TokenExpires.toLong() - CurrentSeconds &#60; 120)
+    {
+        Url = &#34;https://login.windows.net/$Office365Tenant/oauth2/token&#34;
+        ResourcePath = &#34;https://manage.office.com&#34;
+        RedirectUriPath = &#34;urn:ietf:wg:oauth:2.0:oob&#34;
+
+        Body = &#34;resource=$ResourcePath&#38;client_id=$ApplicationID&#38;redirect_uri=$RedirectUriPath&#38;grant_type=refresh_token&#38;refresh_token=$Office365RefreshToken&#34;
+        EncodedBody = new StringEntity(Body)
+
+        CloseableHttpClient UpdateTokenClient = HttpClients.createDefault()
+        httpPost = new HttpPost(Url)
+        httpPost.setHeader(&#34;Content-type&#34;,&#34;application/x-www-form-urlencoded&#34;)
+        httpPost.setEntity(EncodedBody)
+        httpResponse = UpdateTokenClient.execute(httpPost)
+
+        ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+
+        code = httpResponse.getStatusLine().getStatusCode()
+        UpdateTokenClient.close()
+
+        JsonSlurperParser = new JsonSlurper()
+        ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+        Office365TokenExpires = ResponseObject.expires_on
+        Office365AccessToken = ResponseObject.access_token
+        Office365RefreshToken = ResponseObject.refresh_token
+
+        //Update device properties
+        ResourcePath = &#34;/device/devices/$DeviceID&#34;
+        QueryParams = &#39;?patchFields=customProperties&#38;opType=replace&#39;
+        Url = &#34;https://&#34; + Account + &#34;.logicmonitor.com&#34; + &#34;/santaba/rest&#34; + ResourcePath + QueryParams
+        epoch = System.currentTimeMillis()
+        UpdateData = &#39;{&#34;customProperties&#34;:[{&#34;name&#34;:&#34;Office365.TokenExpires&#34;,&#34;value&#34;:&#34;&#39; + Office365TokenExpires + &#39;&#34;},{&#34;name&#34;:&#34;Office365.RefreshToken.key&#34;,&#34;value&#34;:&#34;&#39; + Office365RefreshToken + &#39;&#34;},{&#34;name&#34;:&#34;Office365.AccessToken&#34;,&#34;value&#34;:&#34;&#39; + Office365AccessToken + &#39;&#34;}]}&#39;
+        params = new StringEntity(UpdateData)
+
+        requestVars = &#34;PATCH&#34; + epoch + UpdateData + ResourcePath
+
+        hmac = Mac.getInstance(&#34;HmacSHA256&#34;)
+        secret = new SecretKeySpec(AccessKey.getBytes(), &#34;HmacSHA256&#34;)
+        hmac.init(secret)
+        hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))
+        signature = hmac_signed.bytes.encodeBase64()
+
+        httpclient = HttpClients.createDefault()
+        httpPatch = new HttpPatch(Url)
+        httpPatch.addHeader(&#34;Authorization&#34; , &#34;LMv1 &#34; + AccessId + &#34;:&#34; + signature + &#34;:&#34; + epoch)
+        httpPatch.setHeader(&#34;Accept&#34;, &#34;application/json&#34;)
+        httpPatch.setHeader(&#34;Content-type&#34;, &#34;application/json&#34;)
+        httpPatch.setEntity(params)
+        httpResponse = httpclient.execute(httpPatch)
+        ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+        code = httpResponse.getStatusLine().getStatusCode()
+        httpclient.close()
+
+        return Office365AccessToken
+    }
+    else
+    {
+        return Office365AccessToken
+    }
+}
+
+def GetOffice365Status (String Token, String Office365Tenant)
+{
+    Url = &#34;https://manage.office.com/api/v1.0/$Office365Tenant/ServiceComms//CurrentStatus&#34;
+
+    CloseableHttpClient httpclient = HttpClients.createDefault()
+    httpGet = new HttpGet(Url)
+    httpGet.addHeader(&#34;Authorization&#34; , &#34;Bearer &#34; + Token)
+    httpResponse = httpclient.execute(httpGet)
+
+    ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+
+    JsonSlurperParser = new JsonSlurper()
+    ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+    return ResponseObject.value
+}
+
+AccessToken = GetAccessToken(VarAccount, VarAccessId, VarAccessKey, VarDeviceIdProperty, VarOffice365Tenant, VarApplicationID)
+
+Office365ServicesStatus = GetOffice365Status (AccessToken,VarOffice365Tenant)
+
+Office365ServicesStatus.each
+        {
+            ServiceName = it.Workload
+            it.FeatureStatus.each
+                    {
+                        if (it.FeatureServiceStatus == &#34;ServiceOperational&#34;)
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=1&#34;
+                        }
+                        else if (it.FeatureServiceStatus == &#34;ServiceRestored&#34;)
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=2&#34;
+                        }
+                        else if (it.FeatureServiceStatus == &#34;InformationAvailable&#34;)
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=3&#34;
+                        }
+                        else if (it.FeatureServiceStatus == &#34;ExtendedRecovery&#34;)
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=4&#34;
+                        }
+                        else if (it.FeatureServiceStatus == &#34;ServiceDegradation&#34;)
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=5&#34;
+                        }
+                        else if (it.FeatureServiceStatus == &#34;RestoringService&#34;)
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=6&#34;
+                        }
+                        else
+                        {
+                            println &#34;${ServiceName}_${it.FeatureName.replace(&#34; &#34;,&#34;&#34;)}.status=0&#34;
+                        }
+                    }
+        }
+
+return 0</value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>windowsscript</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>linuxscript</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>windowscmdline</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>linuxcmdline</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        </attributes>
+        <datapoints>
+        <datapoint>
+            <name>status</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>##WILDVALUE##.status</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr>!= 1 timezone=America/Los_Angeles</alertexpr>
+            <alertmissing>3</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description>1 - Service Operational  (the only good one); 2 - ServiceRestored; 3 - InformationAvailable; 4 - ExtendedRecovery; 5 - ServiceDegradation; 6 - RestoringService; 0 - Other</description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        </datapoints>
+        <graphs>
+        </graphs>
+        <overviewgraphs>
+        </overviewgraphs>
+        <scripts>
+        </scripts>
+    </entry>
+</feed>

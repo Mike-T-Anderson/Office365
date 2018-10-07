@@ -1,0 +1,394 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<feed  version="1.0" hasPendingRequests="false" >
+  <company></company>
+  <status>200</status>
+  <errmsg>OK</errmsg>
+  <interval>0</interval>
+    <entry type="predatasource">
+        <version>1538861244</version>
+        <name>Exchange email clients O365</name>
+        <displayedas>Exchange email clients O365</displayedas>
+        <description>By Mike Suding. For more info, see http://blog.mikesuding.com/index.php/2018/07/19/office365</description>
+        <collector>script</collector>
+        <hasMultiInstances>false</hasMultiInstances>
+        <schedule>3600</schedule>
+        <appliesTo>Office365.GraphAPIMonitoringO365</appliesTo>
+        <wildcardauto>false</wildcardauto>
+        <wildcardpersist>false</wildcardpersist>
+        <wildcardlinuxscript></wildcardlinuxscript>
+        <wildcardlinuxcmdline></wildcardlinuxcmdline>
+        <wildcardwinscript></wildcardwinscript>
+        <wildcardwincmdline></wildcardwincmdline>
+        <wildcardgroovyscript></wildcardgroovyscript>
+        <wildcardschedule>1440</wildcardschedule>
+        <wildcarddisable>false</wildcarddisable>
+        <wildcarddeleteinactive>false</wildcarddeleteinactive>
+        <agdmethod>none</agdmethod>
+        <agdparams></agdparams>
+        <group></group>
+        <tags></tags>
+        <technology></technology>
+        <adlist><![CDATA[{"agdmethod":"none","agdparams":"","id":0,"filters":[],"params":{}}]]></adlist>
+        <schemaVersion>2</schemaVersion>
+        <dataSourceType>1</dataSourceType>
+        <attributes>
+        <attribute>
+            <name>scripttype</name>
+            <value>embed</value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>scriptgroovy</name>
+            <value>//Account variables
+String VarAccessId = hostProps.get(&#34;Office365.LM.Id&#34;)
+String VarAccessKey = hostProps.get(&#34;Office365.LM.Key&#34;)
+String VarAccount = hostProps.get(&#34;lm.account&#34;)
+
+String VarDeviceIdProperty = hostProps.get(&#34;system.deviceid&#34;)
+String VarOffice365Tenant = hostProps.get(&#34;Office365.Tenant&#34;)
+String VarApplicationID = hostProps.get(&#34;Office365.AppID.key&#34;)
+
+import groovy.json.JsonSlurper
+import org.apache.commons.codec.binary.Hex
+import org.apache.http.client.methods.HttpGet
+import org.apache.http.client.methods.HttpPost
+import org.apache.http.client.methods.HttpPatch
+import org.apache.http.entity.StringEntity
+import org.apache.http.impl.client.CloseableHttpClient
+import org.apache.http.impl.client.HttpClients
+import org.apache.http.util.EntityUtils
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+
+String GetAccessToken (String Account, String AccessId, String AccessKey, String DeviceID, String Office365Tenant, String ApplicationID)
+{
+    ResourcePath = &#34;/device/devices/$DeviceID/properties&#34;
+    FilterString = &#34;?filter=name~Office365*&#34;
+    Url = &#34;https://&#34; + Account + &#34;.logicmonitor.com&#34; + &#34;/santaba/rest&#34; + ResourcePath + FilterString
+    epoch = System.currentTimeMillis()
+    requestVars = &#34;GET&#34; + epoch + ResourcePath
+    hmac = Mac.getInstance(&#34;HmacSHA256&#34;)
+    secret = new SecretKeySpec(AccessKey.getBytes(), &#34;HmacSHA256&#34;)
+    hmac.init(secret)
+    hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))
+    signature = hmac_signed.bytes.encodeBase64()
+    CloseableHttpClient httpclient = HttpClients.createDefault()
+    httpGet = new HttpGet(Url)
+    httpGet.addHeader(&#34;Authorization&#34; , &#34;LMv1 &#34; + AccessId + &#34;:&#34; + signature + &#34;:&#34; + epoch)
+    httpResponse = httpclient.execute(httpGet)
+    ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+    code = httpResponse.getStatusLine().getStatusCode()
+    httpclient.close()
+
+    JsonSlurperParser = new JsonSlurper()
+    ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+    Office365GraphApiTokenExpires = (ResponseObject.data.items.find {it.name == &#34;Office365.GraphAPI.TokenExpires&#34;}).value
+    Office365GraphApiAccessToken = (ResponseObject.data.items.find {it.name == &#34;Office365.GraphAPI.AccessToken&#34;}).value
+    Office365GraphApiRefreshToken = hostProps.get(&#34;Office365.GraphAPI.RefreshToken.key&#34;)
+
+    CurrentSeconds = System.currentTimeSeconds()
+
+    if (Office365GraphApiTokenExpires.toLong() - CurrentSeconds &#60; 120)
+    {
+        Url = &#34;https://login.windows.net/$Office365Tenant/oauth2/token&#34;
+
+        ResourcePath = &#34;https://graph.microsoft.com&#34;
+        RedirectUriPath = &#34;urn:ietf:wg:oauth:2.0:oob&#34;
+
+        Body = &#34;resource=$ResourcePath&#38;client_id=$ApplicationID&#38;redirect_uri=$RedirectUriPath&#38;grant_type=refresh_token&#38;refresh_token=$Office365GraphApiRefreshToken&#34;
+        EncodedBody = new StringEntity(Body)
+
+        CloseableHttpClient UpdateTokenClient = HttpClients.createDefault()
+        httpPost = new HttpPost(Url)
+        httpPost.setHeader(&#34;Content-type&#34;,&#34;application/x-www-form-urlencoded&#34;)
+        httpPost.setEntity(EncodedBody)
+        httpResponse = UpdateTokenClient.execute(httpPost)
+
+        ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+
+        code = httpResponse.getStatusLine().getStatusCode()
+        UpdateTokenClient.close()
+
+        JsonSlurperParser = new JsonSlurper()
+        ResponseObject = JsonSlurperParser.parseText(ResponseBody)
+
+        Office365GraphApiTokenExpires = ResponseObject.expires_on
+        Office365GraphApiAccessToken = ResponseObject.access_token
+        Office365GraphApiRefreshToken = ResponseObject.refresh_token
+
+        //Update device properties
+        ResourcePath = &#34;/device/devices/$DeviceID&#34;
+        QueryParams = &#39;?patchFields=customProperties&#38;opType=replace&#39;
+        Url = &#34;https://&#34; + Account + &#34;.logicmonitor.com&#34; + &#34;/santaba/rest&#34; + ResourcePath + QueryParams
+        epoch = System.currentTimeMillis()
+        UpdateData = &#39;{&#34;customProperties&#34;:[{&#34;name&#34;:&#34;Office365.GraphAPI.TokenExpires&#34;,&#34;value&#34;:&#34;&#39; + Office365GraphApiTokenExpires + &#39;&#34;},{&#34;name&#34;:&#34;Office365.GraphAPI.RefreshToken.key&#34;,&#34;value&#34;:&#34;&#39; + Office365GraphApiRefreshToken + &#39;&#34;},{&#34;name&#34;:&#34;Office365.GraphAPI.AccessToken&#34;,&#34;value&#34;:&#34;&#39; + Office365GraphApiAccessToken + &#39;&#34;}]}&#39;
+        params = new StringEntity(UpdateData)
+
+        requestVars = &#34;PATCH&#34; + epoch + UpdateData + ResourcePath
+
+        hmac = Mac.getInstance(&#34;HmacSHA256&#34;)
+        secret = new SecretKeySpec(AccessKey.getBytes(), &#34;HmacSHA256&#34;)
+        hmac.init(secret)
+        hmac_signed = Hex.encodeHexString(hmac.doFinal(requestVars.getBytes()))
+        signature = hmac_signed.bytes.encodeBase64()
+
+        httpclient = HttpClients.createDefault()
+        httpPatch = new HttpPatch(Url)
+        httpPatch.addHeader(&#34;Authorization&#34; , &#34;LMv1 &#34; + AccessId + &#34;:&#34; + signature + &#34;:&#34; + epoch)
+        httpPatch.setHeader(&#34;Accept&#34;, &#34;application/json&#34;)
+        httpPatch.setHeader(&#34;Content-type&#34;, &#34;application/json&#34;)
+        httpPatch.setEntity(params)
+        httpResponse = httpclient.execute(httpPatch)
+        ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+        code = httpResponse.getStatusLine().getStatusCode()
+        httpclient.close()
+
+        return Office365GraphApiAccessToken
+    }
+    else
+    {
+        return Office365GraphApiAccessToken
+    }
+}
+
+def GetAppActivityByUsers (String Token)
+{
+    Url = &#34;https://graph.microsoft.com/v1.0/reports/getEmailAppUsageUserCounts(period=&#39;D7&#39;)&#34;
+
+    httpclient = HttpClients.createDefault()
+    httpGet = new HttpGet(Url)
+    httpGet.addHeader(&#34;Authorization&#34; , &#34;Bearer &#34; + Token)
+    httpResponse = httpclient.execute(httpGet)
+
+    ResponseBody = EntityUtils.toString(httpResponse.getEntity())
+    httpclient.close()
+
+    return ResponseBody
+}
+
+AccessToken =  GetAccessToken (VarAccount, VarAccessId, VarAccessKey, VarDeviceIdProperty, VarOffice365Tenant, VarApplicationID)
+
+ActivityByItems = GetAppActivityByUsers (AccessToken)
+
+ItemsActivityArray = ActivityByItems.split(&#34;\r\n&#34;)
+
+ApplicationActivityData = ItemsActivityArray[7].split(&#34;,&#34;)
+
+println (&#34;MailForMac=${(ApplicationActivityData[1].isEmpty() ? &#34;0&#34; : ApplicationActivityData[1])}&#34;)
+println (&#34;OutlookForMac=${(ApplicationActivityData[2].isEmpty() ? &#34;0&#34; : ApplicationActivityData[2])}&#34;)
+println (&#34;OutlookForWindows=${(ApplicationActivityData[3].isEmpty() ? &#34;0&#34; : ApplicationActivityData[3])}&#34;)
+println (&#34;OutlookForMobile=${(ApplicationActivityData[4].isEmpty() ? &#34;0&#34; : ApplicationActivityData[4])}&#34;)
+println (&#34;OutlookForWeb=${(ApplicationActivityData[5].isEmpty() ? &#34;0&#34; : ApplicationActivityData[5])}&#34;)
+println (&#34;POP3App=${(ApplicationActivityData[6].isEmpty() ? &#34;0&#34; : ApplicationActivityData[6])}&#34;)
+println (&#34;IMAP4App=${(ApplicationActivityData[7].isEmpty() ? &#34;0&#34; : ApplicationActivityData[7])}&#34;)
+println (&#34;SMTPApp=${(ApplicationActivityData[8].isEmpty() ? &#34;0&#34; : ApplicationActivityData[8])}&#34;)</value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>windowsscript</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>linuxscript</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>windowscmdline</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        <attribute>
+            <name>linuxcmdline</name>
+            <value></value>
+            <comment></comment>
+        </attribute>
+        </attributes>
+        <datapoints>
+        <datapoint>
+            <name>Outlook_For_Mac</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>OutlookForMac</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>Mail_For_Mac</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>MailForMac</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>IMAP4_App</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>IMAP4App</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>Outlook_For_Mobile</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>OutlookForMobile</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>Outlook_For_Web</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>OutlookForWeb</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>Outlook_For_Windows</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>OutlookForWindows</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>POP3_App</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>POP3App</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        <datapoint>
+            <name>SMTP_App</name>
+            <dataType>7</dataType>
+            <type>2</type>
+            <postprocessormethod>namevalue</postprocessormethod>
+            <postprocessorparam>SMTPApp</postprocessorparam>
+            <usevalue>output</usevalue>
+            <alertexpr></alertexpr>
+            <alertmissing>1</alertmissing>
+            <alertsubject></alertsubject>
+            <alertbody></alertbody>
+            <description></description>
+            <maxvalue></maxvalue>
+            <minvalue></minvalue>
+            <userparam1></userparam1>
+            <userparam2></userparam2>
+            <userparam3></userparam3>
+            <iscomposite>false</iscomposite>
+            <rpn></rpn>
+            <alertTransitionIval>0</alertTransitionIval>
+            <alertClearTransitionIval>0</alertClearTransitionIval>
+        </datapoint>
+        </datapoints>
+        <graphs>
+        </graphs>
+        <overviewgraphs>
+        </overviewgraphs>
+        <scripts>
+        </scripts>
+    </entry>
+</feed>
