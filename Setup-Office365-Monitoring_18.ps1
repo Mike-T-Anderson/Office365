@@ -8,9 +8,9 @@ $DefaultLMDeviceName = ""
 
 $LogFile = "$(Get-Location)" + "\Log.txt"
 $DataSourceO365File   = "$(Get-Location)" + "\Office365_app_status.xml"
-$DataSourceGraphFile1 = "$(Get-Location)" + "\Exchange_email_clients.xml"
-$DataSourceGraphFile2 = "$(Get-Location)" + "\Exchange_email_stats.xml"
-$DataSourceGraphFile3 = "$(Get-Location)" + "\Exchange_mailbox_stats.xml"
+$DataSourceGraphFile1 = "$(Get-Location)" + "\Exchange_email_clients_O365.xml"
+$DataSourceGraphFile2 = "$(Get-Location)" + "\Exchange_email_stats_O365.xml"
+$DataSourceGraphFile3 = "$(Get-Location)" + "\Exchange_mailbox_stats_O365.xml"
 
 $LogObjectReference = [Ref]""
 
