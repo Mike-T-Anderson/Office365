@@ -1,5 +1,5 @@
 ﻿
-$DefaultApplicationName = ""
+$DefaultApplicationName = "LogicMonitor app to monitor Office365"
 $DefaultOffice365Domain = ""
 $DefaulLMTenantName = ""
 $DefaultLMApiId = ''
@@ -432,7 +432,7 @@ Function Show-MainForm
 
         $TargetApplicationName = $TextBox1.Text
 
-        Write-Log -Message "Connecting to AzureAD"
+        Write-Log -Message "Connecting to AzureAD. Please wait..."
         $AzureADConnection = Connect-AzureAD
 
         Write-Log -Message "Obtaining list of registered applications"
